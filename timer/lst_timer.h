@@ -44,7 +44,7 @@ public:
 	util_timer() : prev(NULL), next(NULL) {}
 
 public:
-	time_t expire;
+	time_t expireu;			//定时器到期时间
 
 	void (* cb_func)(client_data *);
 	client_data *user_data;
@@ -96,10 +96,10 @@ public:
 	void show_error(int connfd, const char *info);
 
 public:
-	static int *u_pipefd;
-	sort_timer_lst m_timer_lst;
-	static int u_epollfd;
-	int m_TIMESLOT;
+	static int *u_pipefd;	//信号通知的管道描述符（通常[0]读端，[1]写端）
+	sort_timer_lst m_timer_lst;		//定时器链表（管理所有定时任务）
+	static int u_epollfd;			// 全局epoll实例的文件描述符
+	int m_TIMESLOT;					// 定时触发间隔（单位：秒）
 };
 
 void cb_func(client_data *user_data);

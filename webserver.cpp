@@ -97,3 +97,61 @@ void WebServer::sql_pool()
 	//初始化数据库读取表
 	users->initmysql_result(m_connPool);
 }
+
+//初始化线程池
+void WebServer::thread_pool()
+{
+	//线程池初始化
+	m_pool = new threadpool<http_conn>(m_actormodel, m_connPool, m_thread_num);
+}
+
+//
+void WebServer::eventListen()
+{
+	//网络编程基础步骤
+	m_listenfd = socket(PF_INET, SOCK_STREAM, 0);		
+	assert(m_listenfd >= 0);			//确保套接字创建成功，否则终止程序
+
+	//优雅关闭连接
+	if(0 == m_OPT_LINGER)		//非优雅关闭，调用close直接关闭
+	{
+		struct linger tmp = {0,1};
+		setsockopt(m_listenfd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
+	}
+	else if(1 == m_OPT_LINGER)	//优雅关闭，调用close直到：1s后，发送完毕
+	{
+		struct linger tmp = {1,1};
+		setsockopt(m_listenfd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
+	}
+
+	int ret = 0;
+	struct sockaddr_in address;
+	//将address内存清零，避免脏数据
+	bzero(&address, sizeof(address));
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl(INADDR_ANY);
+	address.sin_port = htos(m_port);
+
+	int flag = 1;
+	/*
+	 * SO_REUSEADDR 选项作用：
+ 	 * 1. 允许立即重用处于TIME_WAIT状态的端口
+ 	 * 2. 允许多个套接字绑定到相同IP和端口(在多播/广播时有用)
+     * 3. 服务器崩溃后可以快速重启而不需要等待系统释放端口
+ 	 */
+	setsockopt(m_listenfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
+	ret = bind(m_listenfd, (struct sockaddr *)&address, sizeof(address));
+	assert(ret >= 0);
+	ret = listen(m_listenfd, 5);
+	assert(ret >= 0);
+
+	utils.init(TIMESLOT);
+
+	//epoll创建内核事件表
+	epoll_event events[MAX_EVENT_NUMBER];
+	m_epollfd = epoll_create(5);
+	assert(m_epollfd != -1);
+
+	utils.addfd(m_epollfd, m_listenfd, false, m_LISTENTrigmode);
+	http_conn::m_epollfd = m_epollfd;
+}
