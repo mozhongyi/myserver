@@ -25,7 +25,7 @@ class threadpool
 		bool append_p(T *request);
 
 	private:
-		/*工作线程运行的汉书，它不断从工作队列中取出任务并执行*/
+		/*工作线程运行的函数，它不断从工作队列中取出任务并执行*/
 		static void *worker(void *arg);
 		void run();
 
@@ -40,7 +40,7 @@ class threadpool
 		int m_actor_model;				//模型切换
 };
 
-	template<typename T>
+template<typename T>
 threadpool<T>::threadpool(int actor_model, connection_pool *connPool,int thread_number, int max_requests): m_actor_model(actor_model),m_thread_number(thread_number), m_max_requests(max_requests),m_threads(NULL),m_connPool(connPool)
 {
 	if(thread_number <= 0 || max_requests <= 0)
@@ -64,13 +64,13 @@ threadpool<T>::threadpool(int actor_model, connection_pool *connPool,int thread_
 	}
 }
 
-	template <typename T>
+template <typename T>
 threadpool<T>::~threadpool()
 {
 	delete[] m_threads;
 }
 
-	template <typename T>
+template <typename T>
 bool threadpool<T>::append(T *request, int state)
 {
 	m_queuelocker.lock();
@@ -87,7 +87,7 @@ bool threadpool<T>::append(T *request, int state)
 	return true;
 }
 
-	template <typename T>
+template <typename T>
 bool threadpool<T>::append_p(T *request)
 {
 	m_queuelocker.lock();
@@ -103,7 +103,7 @@ bool threadpool<T>::append_p(T *request)
 	return true;
 }
 
-	template <typename T>
+template <typename T>
 void *threadpool<T>::worker(void *arg)
 {
 	threadpool *pool = (threadpool *)arg;
@@ -111,7 +111,7 @@ void *threadpool<T>::worker(void *arg)
 	return pool;
 }
 
-	template <typename T>
+template <typename T>
 void threadpool<T>::run()
 {
 	while(true)
