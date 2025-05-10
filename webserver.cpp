@@ -154,4 +154,70 @@ void WebServer::eventListen()
 
 	utils.addfd(m_epollfd, m_listenfd, false, m_LISTENTrigmode);
 	http_conn::m_epollfd = m_epollfd;
+
+	//创建一对相互连接的UNIX域socket，用于进程间通信，实现m_pipefd通信
+	ret = socketpair(PF_UNIX, SOCK_STREAM, 0, m_pipefd);
+	assert(ret != -1);
+	utils.setnonblocking(m_pipefd[1]);
+	//将管道读端添加到epoll中监听
+	utils.addfd(m_epollfd, m_pipefd[0], false, 0);
+	
+	//丢弃SIGPiPE信号，防止程序意外终止
+	utils.addsig(SIGPIPE, SIG_IGN);
+	utils.addsig(SIGALRM, utils.sig_handler, false);
+	utils.addsig(SIGTERM, utils.sig_handler, false);
+
+	alarm(TIMESLOT);
+
+	//保存管道和epoll文件描述符到工具类中
+	Utils::u_pipefd = m_pipefd;
+	Utils::u_epollfd = m_epollfd;
 }
+
+//初始化用户连接数据,创建并设置定时器,将定时器添加到定时器链表
+void WebServer::timer(int connfd, struct sockaddr_in client_address)
+{
+	users[connfd].init(connfd, client_address, m_root, m_root, m_CONNTrigmode, m_close_log, m_user, m_passWord, m_databaseName);
+
+	//初始化client_data数据
+	users_timer[connfd].address = client_address;
+	users_timer[connfd].sockfd = connfd;
+	//创建新的定时器对象
+	util_timer *timer = new util_timer;
+	timer->user_data = &users_timer[connfd];
+	timer->cb_func = cb_func;
+	//设置定时器过期时间
+	time_t cur = time(NULL);
+	timer->expire = cur + 3 * TIMESLOT;
+	//将定时器与客户端关联
+	users_timer[connfd].timer = timer;
+	//将定时器添加到定时器链表进行统一管理
+	utils.m_timer_lst.add_timer(timer);
+}
+
+//若有数据传输，则将定时器往后延迟3个单位
+//并对新的定时器在链表上的位置进行调整
+void WebServer::adjust_timer(util_timer *timer)
+{
+	time_t cur = time(NULL);
+	timer->expire = cur + 3 * TIMESLOT;
+	utils.m_timer_lst.adjust_timer(timer);
+
+	LOG_INFO("%s", "adjust timer once");
+}
+
+//处理定时器到期事件的函数，主要完成定时器回调触发、资源清理和日志记录工作
+void WebServer::deal_timer(util_timer *timer, int sockfd)
+{
+	// 触发回调，处理连接关闭等操作
+	timer->cb_func(&users_timer[sockfd]);
+	if(timer)
+	{
+		// 从定时器链表中移除该定时器
+		utils.m_timer_lst.del_timer(timer);
+	}
+	//获取socket fd并记录日志
+	LOG_INFO("close fd %d", users_timer[sockfd].sockfd);
+}
+
+

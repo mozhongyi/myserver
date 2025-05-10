@@ -44,7 +44,7 @@ public:
 	util_timer() : prev(NULL), next(NULL) {}
 
 public:
-	time_t expireu;			//定时器到期时间
+	time_t expire;			//定时器到期时间
 
 	void (* cb_func)(client_data *);
 	client_data *user_data;
@@ -85,7 +85,7 @@ public:
 	void addfd(int epollfd, int fd, bool one_shot, int TRIGMode);
 	
 	//信号处理函数
-	static void sighandler(int sig);
+	static void sig_handler(int sig);
 	
 	//设置信号函数
 	void addsig(int sig, void(handler)(int), bool restart = true);
