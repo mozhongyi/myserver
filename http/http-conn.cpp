@@ -1,0 +1,502 @@
+/*************************************************************************
+    > File Name: http-conn.cpp
+    > Author: sheep
+    > Created Time: 2025年05月12日 星期一 17时29分34秒
+ ************************************************************************/
+#include "http_conn.h"
+#include "mysql/mysql.h"
+#include <fstream>
+
+//定义http响应的一些状态信息
+const char *ok_200_title = "OK";
+const char *error_400_title = "Bad Request";
+const char *error_403_title = "Your request has bad syntax or is inherently impossible to staisfy.\n";
+const char *error_403_form = "You do not have permission to get file form this server.\n";
+const char *error_404_title = "Not Found";
+const char *error_404_form = "The requested file was not found on this server.\n";
+const char *error_500_title = "Internal Error";
+const char *error_500_form = "There was unusual problem serving the request file.\n"l
+
+locker m_lock;
+map<string, string> users;
+
+void http_conn::initmysql_result(connection_pool *connPool)
+{
+	//先从连接池中取一个连接
+	MYSQL *mysql = NULL;
+	connectuonRAII mysqlcon(&mysql, connPool);
+
+	//在user表中检索username, passwd数据,浏览器输入
+	if(mysql_query(mysql, "Select username, passwd FROM user"))
+	{
+		// mysql_error()返回最后一次MySQL操作的错误描述
+		LOG_ERROR("SELECT error:%s\n", mysql_error(mysql));
+	}
+
+	//从表中检索完整的结果集
+	MYSQL_RES *result = mysql_store_result(mysql);
+
+	//返回结果集中的列数
+	int num_fields = mysql_num_fields(result);
+
+	//返回所有字段结构的数组
+	MYSQL_FIELD *fields = mysql_fetch_fields(result);
+
+	//从结果集中获取下一行,将对应的用户名和密码，存入map中
+	while(MYSQL_ROW row = mysql_fetch_row(result))
+	{
+		string temp1(row[0]);
+		string temp2(row[1]);
+		users[temp1] = temp2;
+	}
+}
+
+//对文件描述符设置非阻塞
+int setnonblocking(int fd)
+{
+	int old option = fcntl(fd, F_GETFL);
+	int new_option = old_option | O_NONBLOCK;
+	fcntl(fd, F_SETFL, new_option);
+	return old_option;
+}
+
+//将内核事件表注册读事件，ET模式，选择开启EPOLLONESHOT
+void addfd(int epollfd, int fd, bool one_shot, int TRIGMode)
+{
+	epoll_event event;
+	event.data.fd = fd;
+	
+	// 设置事件类型
+	if(1 == TRIGMode)
+		event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+	else
+		event.events = EPOLLIN | EPOLLRDHUP;
+	
+	if(one_shot)
+		// EPOLLONESHOT - 一个事件只触发一次，除非用epoll_ctl重置
+		event.events |= EPOLLONESHOT;
+	epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
+	//设置文件描述符为非阻塞模式
+	setnonblocking(fd);
+}
+
+//从内核时间表删除描述符
+void removefd(int epollfd, int fd)
+{
+	epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
+	close(fd);
+}
+
+//将事件重置为EPOLLONESHOT
+void modfd(int epollfd, int fd, int ev, int TRIGMode)
+{
+	epoll_event event;
+	event.data.fd = fd;
+
+	if(1 == TRIGMode)
+		event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
+	else
+		event.events = ev | EPOLLONESHOT | EPOLLRDHUP;
+	
+	// EPOLL_CTL_MOD - 修改已注册的文件描述符的事件
+	epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
+}
+
+int http_conn::m_user_count = 0;
+int http_conn::m_epollfd = -1;
+
+// 关闭连接，关闭一个连接，客户总量减一
+// 参数：read_close - 是否真正需要关闭连接(用于条件性关闭)
+void http_conn::close_conn(bool read_close)
+{
+	// 检查是否需要真正关闭且套接字描述符有效
+	if(real_close && (m_sockfd) != -1)
+	{
+		// 打印关闭的套接字信息(调试用)
+		printf("close %d\n", m_sockfd);
+		// 将套接字描述符设为无效值(-1)
+		removefd(m_epollfd, m_sockfd);
+		m_sockfd = -1;
+		m_user_count--;
+	}
+}
+
+
+//初始化连接，外部调用初始化套接字地址
+void http_conn::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode, int close_log, string user, string passwd, string sqlname)
+{
+	// 设置套接字描述符和客户端地址
+	m_scokfd = scokfd;
+	m_address = addr;
+	
+	// 将套接字添加到epoll监控
+	addfd(m_epollfd, sockfd, true, m_TRIGMode);
+
+	// 增加当前用户连接计数
+	m_user_count++;
+
+	//当浏览器出现连接重置时，可能是网站根目录出错或http响应格式出错或者访问的文件中的内容完全为空
+	//初始化网站根目录和相关设置
+	doc_root = root;
+	m_TRIGMode = TRIGMode;
+	m_close_log = close_log;
+
+	// 数据库相关参数设置
+	strcpy(sql_user, user.c_str());
+	strcpy(sql_passwd, passwd.c_str());
+	strcpy(sql_name, sqlname.c_str());
+	
+	// 调用类内部初始化函数
+	init();
+}
+
+// 初始化新接受的连接
+// check_state默认为分析请求行状态
+void http_conn::init()
+{
+	// 重置MySQL连接指针，将在需要时建立连接
+	mysql = NULL;
+	// 待发送字节数清零
+	bytes_to_send = 0;
+	// 初始状态：解析请求行
+	m_check_state = CHECK_STATE_REQUESTLINE;
+	// 默认不保持连接(HTTP Keep-Alive)
+	m_linger = false;
+
+	// 默认GET方法
+	m_method = GET;
+	// 请求URL指针重置
+	m_url = 0;
+	// HTTP版本指针重置
+	m_version = 0;
+	// 内容长度清零
+	m_content_length = 0;
+	// 主机头指针重置
+	m_host = 0;
+
+	// 行起始位置重置
+	m_start_line = 0;
+	// 已解析位置重置
+	m_checked_idx = 0;
+	// 读缓冲区位置重置
+	m_read_idx = 0;
+	// 写缓冲区位置重置
+	m_write_idx = 0;
+
+	// CGI模式标志重置
+	cgi = 0;
+	// 连接状态重置
+	m_state = 0;
+	// 定时器标志重置
+	timer_flag = 0;
+	// 改进标志重置(用于特殊处理)
+	improv = 0;
+
+	// 清空读缓冲区
+	memset(m_read_buf, '\0', READ_BUFFER_SIZE);
+	// 清空写缓冲区
+	memset(m_write_buf, '\0', WRITE_BUFFER_SIZE);
+	// 清空文件名缓冲区
+	memset(m_real_file, '\0', FILENAME_LEN);
+}
+
+// 从状态机，用于分析一行内容
+// 返回为行的读取状态，有LINE_OK,LINE_BAD,LINE_OPEN
+http_conn::LINE_STATUS http_conn::parse_line()
+{
+	// 临时存储当前检查的字符
+	char temp;
+	// 遍历已读取但未检查的数据
+	for(; m_checked_idx < m_read_id; ++m_checked_idx)
+	{
+		// 获取当前字符
+		temp = m_read_buf[m_checked_idx];
+		// 情况1：遇到回车符\r
+		if(temp == '\r')
+		{
+			// 检查是否是缓冲区末尾(数据不完整)
+			if((m_checked_idx + 1) == m_read_idx)
+				return LINE_OPEN;
+			// 检查是否跟随换行符\n(标准HTTP行结束)
+			else if(m_read_buf[m_checked_idx + 1] == '\n')
+			{
+				// 将\r\n替换为字符串结束符\0\0
+				m_read_buf[m_checked_idx++] = '\0';
+				m_read_buf[m_checked_idx++] = '\0';
+				// 成功解析一行
+				return LINE_OK;
+			}
+			// 只有\r没有\n，格式错误
+			return LINE_BAD;
+		
+		}
+		// 情况2：遇到换行符\n(可能是前一个缓冲区以\r结束的情况)
+		else if(temp == '\n')
+		{
+			// 检查前面是否是\r(跨缓冲区的行结束)
+			if(m_checked_idx > 1 && m_read_buf[m_checked_idx - 1] == '\r')
+			{
+				// 将\r\n替换为字符串结束符\0\0
+				m_read_buf[m_checked_idx - 1] = '\0';
+				m_read_buf[m_checked_idx++] = '\0';
+				return LINE_OK;
+			}
+			// 单独的\n，格式错误
+			return LINE_BAD;
+		}
+	}
+	// 遍历完所有数据但没找到行结束符
+	return LINE_OPEN;
+}
+
+//循环读取客户数据，直到数据可读或对方关闭连接
+//非阻塞ET工作模式下，需要一次性将数据读完
+bool http_conn::read_once()
+{
+	// 检查读缓冲区是否已满
+	if(m_read_idx >= READ_BUFFER_SIZE)
+	{
+		return false;
+	}
+	// 记录本次读取的字节数
+	int bytes_read = 0;
+
+	// LT读取数据
+	if(0 == m_TRIGMode)
+	{
+		// 调用recv读取数据
+		bytes_read = recv(m_sockfd, m_read_buf + m_read_idx, READ_BUFFER_SIZE - m_read_idx, 0);
+		// 更新已读取数据的索引
+		m_read_idx += bytes_read;
+		
+		// <=0 表示连接关闭或出错
+		if(bytes_read <= 0)
+		{
+			return false;
+		}
+		
+		// 成功读取数据
+		return true;
+	}
+	// ET读数据
+	else
+	{
+		// ET模式需要循环读取，直到读完所有数据
+		while(true)
+		{
+			bytes_read = recv(m_sockfd, m_read_buf + m_read_idx, READ_BUFFER_SIZE - m_read_idx, 0);
+			// 错误处理
+			if(bytes_read == -1)
+			{
+				// 非阻塞模式下，EAGAIN/EWOULDBLOCK表示数据已读完
+				if(errno == EAGAIN || errno == EWOULDBLOCK)
+					break;
+				return false;
+			}
+			// 对方关闭连接
+			else if(bytes_read == 0)
+			{
+				return false;
+			}
+			// 更新已读取数据的索引
+			m_read_idx += bytes_read;
+		}
+		return true;
+	}
+}
+
+//解析http请求行，获取请求方法，目标url及http版本号
+http_conn::HTTP_CODE http_conn::parse_request_line(char *text)
+{
+	// 1. 查找请求方法后的第一个空格或制表符位置
+    // strpbrk用于查找字符串中任意匹配字符的位置
+	m_url = strpbrk(text, " \t");
+	// 如果没有找到空格或制表符，说明请求行格式错误
+	if(!m_url)
+	{
+		// 返回错误请求状态码
+		return BAD_REQUEST;
+	}
+
+	// 2. 将空格位置设为字符串结束符'\0'，分隔出方法字符串
+    // 并将m_url指针移动到方法后的第一个字符
+	*m_url++ = '\0';
+
+	// 3. 解析请求方法
+	char *method = text;			// method指向请求方法字符串开始位置
+	// 不区分大小写比较
+	if(strcasecmp(method, "GET") == 0)
+		m_method = GET;
+	else if(strcasecmp(method, "POST") == 0)
+	{
+		m_method = POST;
+		// 标记需要CGI处理
+		cgi = 1;
+	}
+	else
+		return BAD_REQUEST;
+
+	// 4. 跳过URL前的空格和制表符
+    // strspn计算连续匹配字符的长度
+	m_url += strspn(m_url, " \t");
+
+	// 5. 查找HTTP版本前的空格或制表符
+	m_version = strpbrk(m_url, " \t");
+	if(!m_version)
+		return BAD_REQUEST;
+
+	// 6. 分隔URL和版本号
+	*m_version++ = '\0';
+	// 跳过版本号前的空白
+	m_version += strspn(m_version, " \t");
+	
+	// 7. 检查HTTP版本是否为1.1
+	if(strcasecmp(m_version, "HTTP/1.1") != 0)
+		return BAD_REQUEST;
+
+	// 8. 处理URL中的协议部分(http://或https://)
+	if(strncasecmp(m_url, "http://", 7) == 0)				// 比较前7个字符
+	{
+		m_url += 7;				// 跳过"http://"
+		m_url = strchr(m_url, '/');							// 查找第一个'/'
+	}
+	
+	// 9. 检查URL是否有效
+	if(!m_url || m_url[0] != '/')
+		return BAD_REQUEST;						// URL必须以'/'开头
+	
+	//当url为/时显示判断界面
+	if(strlen(m_url) == 1)
+		strcat(m_url, "judge.html");
+
+	// 11. 改变状态机状态，准备解析头部字段
+	m_check_state = CHECK_STATE_HEADER;
+
+	// 12. 返回请求不完整状态，等待继续解析
+	return NO_REQUEST;
+
+}
+
+// 解析http请求的一个头部信息
+http_conn::HTTP_CODE http_conn::parse_headers(char *text)
+{
+	// 检查空行，头部结束的标志
+	if(text[0] == '\0')
+	{
+		// 如果内容长度不为0，说明还有请求体需要读取
+		if(m_content_length != 0)
+		{
+			// 转换状态到检查内容体状态
+			m_check_state = CHECK_STATE_CONTENT;
+			return NO_REQUEST;
+		}
+		// 如果没有请求体，则头部解析完成，获得完整请求
+		return GET_REQUEST;
+	}
+	// 解析Connection头部
+	else if(strncasecmp(text, "Connection:", 11) == 0)
+	{
+		// 跳过"Connection:"
+		text += 11;
+		// 跳过可能存在的空白字符(空格和制表符)
+		text += strspn(text, " \t");
+		// 检查是否为keep-alive连接
+		if(strcasecmp(text, "kepp-alive") == 0)
+		{
+			// 设置长连接标志
+			m_linger = true;
+		}
+	}
+	// 解析Content-length头部
+	else if(strncasecmp(text, "Content-length:", 15) == 0)
+	{
+		// 跳过"Content-length:"
+		text += 5;
+		// 跳过空白字符
+		text += strspn(text, " \t");
+		// 直接存储主机名指针
+		m_host = text;
+	}
+	// 未知头部处理
+	else
+	{
+		// 记录未知头部信息到日志
+		LOG_INFO("oop!unknow header: %s", text);
+	}
+	// 默认返回请求未完成状态
+	return NO_REQUEST;
+}
+
+//判断http请求是否被完整呢个读入
+http_conn::HTTP_CODE http_conn::parse_content(char *text)
+{
+	// 检查已读取的数据量是否达到内容长度
+	if(m_read_idx >= (m_content_length + m_checked_idx))
+	{
+		// 在内容体末尾添加字符串结束符
+		text[m_content_length] = '\0';
+		//POST请求中最后为输入的用户名和密码
+		m_string = text;
+		return GET_REQUEST;
+	}
+	// 返回获取完整请求的状态
+	return NO_REQUEST;
+}
+
+// 处理读取到的HTTP请求数据
+http_conn::HTTP_CODE http_conn::process_read()
+{
+	// 当前行解析状态
+	LINE_STATUS line_status = LINE_OK;
+	// HTTP请求处理结果
+	HTTP_CODE ret = NO_REQUEST;
+	// 当前处理的行文本
+	char *text = 0;
+	
+	// 主解析循环：处理内容体或按行解析
+	while((m_check_state == CHECK_STATE_CONTENT && line_statux == LINE_OK) || ((line_status == parse_line()) == LINE_OK))
+	{
+		// 获取当前行文本
+		text = get_line();
+		// 更新起始行位置
+		m_start_line = m_checked_idx;
+		// 记录日志
+		LOG_INFO("%s", text);
+
+		// 根据当前解析状态处理
+		switch(m_check_state)
+		{
+		case CHECK_STATE_REQUESTLINE:				// 解析请求行
+		{
+			ret = parse_request_line(text);
+			if(ret == BAD_REQUEST)
+				return BAD_REQUEST;
+			break;
+		}
+		case CHECK_STATE_HEADER:					// 解析头部
+		{
+			ret = parse_headers(text);
+			if(ret == BAD_REQUEST)
+				return BAD_REQUEST;
+			else if(ret == GET_REQUEST)				// 头部解析完成
+			{
+				return do_request();				// 执行请求处理
+			}
+			break;
+		}
+		case CHECK_STATE_CONTENT:					// 解析内容体
+		{
+			ret = parse_content(text);
+			if(ret == GET_REQUEST)					// 内容体解析完成
+				return do_request();				// 执行请求处理
+			line_status = LINE_OPEN;				// 标记行状态为开放(继续读取)
+			break;
+		}
+		default:
+			return INITERNAL_ERROR;
+		}
+	}
+	// 请求未完成，需要继续读取数据
+	return NO_REQUEST;
+}
+
