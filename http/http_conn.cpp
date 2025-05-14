@@ -516,11 +516,11 @@ http-conn::HTTP_CODE http_conn::do_request()
 		char flag = m_url[1];
 		
 		// 分配内存并构造新的URL路径
-		char *m_url_read = (char *)malloc(sizeof(char) * 200);
-		strcpy(m_url_read, "/");
+		char *m_url_real = (char *)malloc(sizeof(char) * 200);
+		strcpy(m_url_rea, "/");
 		// 跳过标志字符
-		strcat(m_url_read, m_url + 2);
-		strncpy(m_rad_file + len, m_url_real, FILENAME_LEN - len -1);
+		strcat(m_url_real, m_url + 2);
+		strncpy(m_real_file + len, m_url_real, FILENAME_LEN - len -1);
 		free(m_url_real);
 
 		//将用户名和密码提取出来

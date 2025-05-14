@@ -160,7 +160,7 @@ private:
 	CHECK_STATE m_check_state;			// 当前解析状态
 	METHOD m_method;					// 请求方法 
 	char m_real_file[FILENAME_LEN];		// 请求文件的完整路径
-	char *m_url;						// 请求的URL
+	char *m_url;						// 客户端请求的URL路径部分
 	char *m_version;					// HTTP版本
 	char *m_host;						// 主机名
 	long m_content_length;				// 内容长度
