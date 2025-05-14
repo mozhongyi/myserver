@@ -517,7 +517,7 @@ http-conn::HTTP_CODE http_conn::do_request()
 		
 		// 分配内存并构造新的URL路径
 		char *m_url_real = (char *)malloc(sizeof(char) * 200);
-		strcpy(m_url_rea, "/");
+		strcpy(m_url_real, "/");
 		// 跳过标志字符
 		strcat(m_url_real, m_url + 2);
 		strncpy(m_real_file + len, m_url_real, FILENAME_LEN - len -1);
@@ -651,8 +651,140 @@ http-conn::HTTP_CODE http_conn::do_request()
 	
 	// 内存映射文件内容
 	int fd = open(m_real_file, O_RDONLY);
-	m_file_address(char *)mmap(0, m_file_stat.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+	m_file_address = (char *)mmap(0, m_file_stat.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 	close(fd);
 	// 文件请求成功
 	return FILE_REQUEST;
+}
+
+// 取消内存映射
+void http_conn::unmap()
+{
+	// 检查是否有有效的内存映射地址
+	if(m_file_address)
+	{
+		// 使用munmap系统调用取消内存映射
+        // 参数1: 映射的内存起始地址
+        // 参数2: 映射的内存区域大小(从文件状态中获取)
+		munmap(m_file_address, m_file_stat.st_size);
+		// 将指针置为0/NULL，避免成为悬垂指针
+		m_file_address = 0;
+	}
+}
+
+// 向客户端发送数据的函数
+bool http_conn::write()
+{
+	// 临时变量，记录每次writev的返回值
+	int temp = 0;
+	// 如果没有数据要发送，重新初始化并返回
+	if(bytes_to_send == 0)
+	{
+		// 修改epoll事件为可读
+		modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+		// 重新初始化连接状态
+		init();
+		return true;
+	}
+	
+	// 循环发送数据直到全部发送完毕或出错
+	while(1)
+	{
+		// 使用writev分散写，同时发送头部和数据
+		temp = writev(m_sockfd, m_iv, m_iv_count);
+	
+		// 发送出错处理
+		if(temp < 0)
+		{
+			// 如果是EAGAIN错误(写缓冲区满)，等待下次可写事件
+			if(errno == EAGAIN)
+			{
+				// 注册可写事件
+				modfd(m_epollfd, m_sockfd, EPOLLOUT, m_TRIGMode);
+				return true;
+			}
+			// 其他错误则取消内存映射并返回失败
+			unmap();
+			return false;
+		}
+		
+		// 更新已发送和待发送字节数
+		bytes_have_send += temp;
+		bytes_to_send -= temp;
+
+		// 调整iovec结构
+		if(bytes_have_send >= m_iv[0].iov_len)			// 头部已全部发送完
+		{
+			// 第一个iovec长度设为0
+			m_iv[0].iov_len = 0;
+			// 调整文件数据的起始位置和长度
+			m_iv[1].iov_base = m_file_address + (bytes_have_send - m_write_idx);
+			m_iv[1].iov_len = bytes_to_send;
+		}
+		// 头部未发送完
+		else
+		{
+			// 调整头部数据的起始位置和剩余长度
+			m_iv[0].iov_base = m_write_buf + bytes_have_send;
+			m_iv[0].iov_len = m_iv[0].iov_len - bytes_have_send;
+		}
+		
+		// 检查是否全部发送完毕
+		if(bytes_to_send <= 0)
+		{
+			// 取消内存映射
+			unmap();
+			// 重新注册可读事件
+			modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+			
+			// 根据Connection字段决定是否保持连接
+			if(m_linger)		//保持连接 
+			{
+				// 重新初始化连接状态
+				init();
+				return true;
+			}
+			// 关闭连接
+			else
+			{
+				return false;
+			}
+		}
+	}
+}
+
+// 向HTTP响应缓冲区添加格式化数据
+bool http_conn::add_response(const char *format, ...)
+{
+	// 检查当前写入位置是否已超出或达到缓冲区上限
+    // 防止后续操作导致缓冲区溢出
+	if(m_write_idx >= WRITE_BUFFER_SIZE)
+		return false;
+
+	// 定义可变参数列表
+	va_list arg_list;
+	// 初始化可变参数列表，从format之后开始获取参数
+	va_start(arg_list, format);
+	// 使用vsnprintf安全地格式化输出到缓冲区
+    // m_write_buf + m_write_idx 是写入的起始位置
+    // WRITE_BUFFER_SIZE-1-m_write_idx 是剩余可用缓冲区大小（-1 为了给字符串结尾的'\0'留空间
+	int len = vsnprintf(m_write_buf + m_write_idx, WRITE_BUFFER_SIZE-1-m_write_idx, format, arg_list);
+	// 检查格式化后的字符串长度是否超出剩余缓冲区空间
+    // 如果超出，清理资源并返回失败
+	if(len >= (WRITE_BUFFER_SIZE-1-m_write_idx))
+	{
+		// 释放可变参数列表资源
+		va_end(arg_list);
+		return false;
+	}
+
+	// 更新写入位置索引，将其增加已写入数据的长度
+	m_write_idx += len;
+	// 释放可变参数列表资源，避免内存泄漏
+	va_end(arg_list);
+	
+	// 记录日志，输出完整的响应内容（包括已写入的所有响应）
+	LOG_INFO("request:%s", m_write_buf);
+
+	return true;
 }
