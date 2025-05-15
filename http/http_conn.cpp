@@ -24,7 +24,7 @@ void http_conn::initmysql_result(connection_pool *connPool)
 {
 	//先从连接池中取一个连接
 	MYSQL *mysql = NULL;
-	connectuonRAII mysqlcon(&mysql, connPool);
+	connectionRAII mysqlcon(&mysql, connPool);
 
 	//在user表中检索username, passwd数据,浏览器输入
 	if(mysql_query(mysql, "Select username, passwd FROM user"))
@@ -126,7 +126,7 @@ void http_conn::close_conn(bool read_close)
 void http_conn::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode, int close_log, string user, string passwd, string sqlname)
 {
 	// 设置套接字描述符和客户端地址
-	m_scokfd = sockfd;
+	m_sockfd = sockfd;
 	m_address = addr;
 	
 	// 将套接字添加到epoll监控
@@ -401,7 +401,7 @@ http_conn::HTTP_CODE http_conn::parse_headers(char *text)
 		// 跳过可能存在的空白字符(空格和制表符)
 		text += strspn(text, " \t");
 		// 检查是否为keep-alive连接
-		if(strcasecmp(text, "kepp-alive") == 0)
+		if(strcasecmp(text, "keep-alive") == 0)
 		{
 			// 设置长连接标志
 			m_linger = true;
@@ -493,7 +493,7 @@ http_conn::HTTP_CODE http_conn::process_read()
 			break;
 		}
 		default:
-			return INITERNAL_ERROR;
+			return INTERNAL_ERROR;
 		}
 	}
 	// 请求未完成，需要继续读取数据
@@ -558,7 +558,7 @@ http-conn::HTTP_CODE http_conn::do_request()
 				m_lock.lock();
 				int res = mysql_query(mysql, sql_insert);
 				users.insert(pair<string, string>(name, password));
-				m_lock(unlock);
+				m_lock.unlock();
 
 				// 根据数据库操作结果重定向不同页面
 				if(!res)
@@ -600,7 +600,7 @@ http-conn::HTTP_CODE http_conn::do_request()
 	{
 		char *m_url_real = (char *)malloc(sizeof(char) * 200);
 		strcpy(m_url_real, "/log.html");
-		strncpy(m_real_file + len, m_url_rael, strlen(m_url_real));
+		strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
 		free(m_url_real);
 	}
@@ -888,7 +888,7 @@ bool http_conn::process_write(HTTP_CODE ret)
 			m_iv[1].iov_base = m_file_address;			// 文件内容部分
 			m_iv[1].iov_len = m_file_stat.st_size;		// 文件长度
 			m_iv_count = 2;								// 两个缓冲区
-			bytes_to_send = m_write_idx + m_file_stat.st.size;	// 总发送字节数
+			bytes_to_send = m_write_idx + m_file_stat.st_size;	// 总发送字节数
 			return true;
 		}
 		// 文件为空的情况
