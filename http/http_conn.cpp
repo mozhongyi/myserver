@@ -788,3 +788,152 @@ bool http_conn::add_response(const char *format, ...)
 
 	return true;
 }
+
+// 添加HTTP响应的状态行
+bool http_conn::add_status_line(int status, const char *title)
+{
+	// 格式示例："HTTP/1.1 200 OK\r\n"
+	return add_response("%s %d %s\r\n", "HTTP/1.1", status, title);
+}
+
+// 添加HTTP响应头部的多个标准字段
+bool http_conn::add_headers(int conten_len)
+{
+	// 依次添加三个标准HTTP头部字段，使用短路与(&&)确保顺序执行：
+    // 1. 添加Content-Length头部（内容长度）
+    // 2. 添加Connection头部（连接保持选项）
+    // 3. 添加空行（分隔头部和正文）
+    // 只有所有操作都成功才返回true
+	return add_content_length(content_len) && add_linger() && add_blank_line();
+}
+
+// 添加HTTP响应头中的Content-Length字段
+bool http_conn::add_content_length(int content_len)
+{
+	return add_response("Content-Length:%d\r\n", content_len);
+}
+
+// 添加HTTP响应头中的Content-Type字段
+bool http_conn::add_content_type()
+{
+	return add_response("Content-Type:%s\r\n","text/html");
+}
+
+// 添加HTTP响应头中的Connection字段
+bool http_conn::add_linger()
+{
+	return add_response("Connection:%s\r\n",(m_linger == true) ? "keep-alive" : "close");
+}
+
+// 添加HTTP响应头结束的空行
+bool http_conn::add_blank_line()
+{
+	return add_response("%s", "\r\n");
+}
+
+// 添加HTTP响应正文内容
+bool http_conn::add_content(const char *content)
+{
+	return add_response("%s", content);
+}
+
+// 根据HTTP处理结果生成对应的响应报文
+bool http_conn::process_write(HTTP_CODE ret)
+{
+	switch(ret)
+	{
+	// 500 服务器内部错误
+	case INTERNAL_ERROR:
+	{
+		// 添加状态行: HTTP/1.1 500 Internal Error
+		add_status_line(500, error_500_title);
+		// 添加头部，包含错误页面长度
+		add_headers(strlen(error_500_form));
+		// 添加错误页面内容
+		if(!add_conten(error_500_form))
+		{
+			return false;
+		}
+		break;
+	}
+	// 404 资源未找到
+	case BAD_REQUEST:
+	{
+		add_status_line(404, error_404_title);
+		add_headers(strlen(error_404_form));
+		if(!add_content(error_404_form))
+			return false;
+		break;
+	}
+	// 403 禁止访问
+	case FORBIDDEN_REQUEST:
+	{
+		add_status_line(403, error_403_title);
+		add_headers(strlen(error_403_form));
+		if(!add_content(error_404_form))
+			return false;
+		break;
+	}
+	// 200 文件请求成功
+	case FILE_REQUEST:
+	{
+		add_status_line(200, ok_200_title);
+		// 文件存在且非空
+		if(m_file_stat.st_size != 0)
+		{
+			add_headers(m_file_stat.st_size);
+			// 设置iovec结构，准备分散写(内存缓冲区+文件内容)
+			m_iv[0].iov_base = m_write_buf;				// 响应头部分
+			m_iv[0].iov_len = m_write_idx;				// 头部长度
+			m_iv[1].iov_base = m_file_address;			// 文件内容部分
+			m_iv[1].iov_len = m_file_stat.st.size;		// 文件长度
+			m_iv_count = 2;								// 两个缓冲区
+			bytes_to_send = m_write_idx + m_file_stat.st.size;	// 总发送字节数
+			return true;
+		}
+		// 文件为空的情况
+		else
+		{
+			const char *ok_string = "<html><bodu></body></html>";
+			add_headers(strlen(ok_string));
+			if(!add_content(ok_string))
+				return false;
+		}
+	}
+	default:
+		return false;
+	}
+
+	// 设置普通响应(非文件)的iovec结构
+	// 整个响应都在内存缓冲区
+	m_iv[0].iov_base = m_write_buf;
+	// 缓冲区长度
+	m_iv[0].iov_len = m_write_idx;
+	m_iv_count = 1;
+	// 发送总字节数
+	bytes_to_send = m_write_idx;
+	return true;
+}
+
+// 处理HTTP连接的主流程控制函数
+void http_conn::process()
+{
+	// 处理HTTP请求读取和解析
+	HTTP_CODE read_ret = process_read();
+	// 如果请求不完整，需要继续读取数据
+	if(read_ret == NO_REQUEST)
+	{
+		// 修改epoll事件为可读，等待更多数据到达
+		modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+		return;
+	}
+	// 根据解析结果生成HTTP响应
+	bool write_ret = process_write(read_ret);
+	// 如果响应生成失败，关闭连接
+	if(!write_ret)
+	{
+		close_conn();
+	}
+	// 准备发送响应数据，设置epoll事件为可写
+	modfd(m_epollfd, m_sockfd, EPOLLOUT, m_TRIGMode);
+}
