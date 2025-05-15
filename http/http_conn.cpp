@@ -570,7 +570,7 @@ http-conn::HTTP_CODE http_conn::do_request()
 			}
 			else
 				// 用户名已存在
-				strcpy(m_url, "registerError.html");
+				strcpy(m_url, "/registerError.html");
 		}
 		//如果是登陆，直接判断
 		//若浏览器端输入的用户名和密码在表中可以查找到，返回1，否则返回0
@@ -592,7 +592,7 @@ http-conn::HTTP_CODE http_conn::do_request()
 	{
 		char *m_url_real = (char *)malloc(sizeof(char) * 200);
 		strcpy(m_url_real, "/register.html");
-		strcpy(m_real_file + len, m_url_real, strlen(m_url_real));
+		strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
 		free(m_url_real);
 	}
@@ -615,7 +615,7 @@ http-conn::HTTP_CODE http_conn::do_request()
 	else if(*(p + 1) == '6')
 	{
 		char *m_url_real = (char *)malloc(sizeof(char) * 200);
-		strcpy(m_url_real, "video.html");
+		strcpy(m_url_real, "/video.html");
 		strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
 		free(m_url_real);
