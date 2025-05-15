@@ -15,7 +15,7 @@ const char *error_403_form = "You do not have permission to get file form this s
 const char *error_404_title = "Not Found";
 const char *error_404_form = "The requested file was not found on this server.\n";
 const char *error_500_title = "Internal Error";
-const char *error_500_form = "There was unusual problem serving the request file.\n"l
+const char *error_500_form = "There was unusual problem serving the request file.\n";
 
 locker m_lock;
 map<string, string> users;
@@ -54,7 +54,7 @@ void http_conn::initmysql_result(connection_pool *connPool)
 //对文件描述符设置非阻塞
 int setnonblocking(int fd)
 {
-	int old option = fcntl(fd, F_GETFL);
+	int old_option = fcntl(fd, F_GETFL);
 	int new_option = old_option | O_NONBLOCK;
 	fcntl(fd, F_SETFL, new_option);
 	return old_option;
@@ -126,7 +126,7 @@ void http_conn::close_conn(bool read_close)
 void http_conn::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode, int close_log, string user, string passwd, string sqlname)
 {
 	// 设置套接字描述符和客户端地址
-	m_scokfd = scokfd;
+	m_scokfd = sockfd;
 	m_address = addr;
 	
 	// 将套接字添加到epoll监控
@@ -454,7 +454,7 @@ http_conn::HTTP_CODE http_conn::process_read()
 	char *text = 0;
 	
 	// 主解析循环：处理内容体或按行解析
-	while((m_check_state == CHECK_STATE_CONTENT && line_statux == LINE_OK) || ((line_status == parse_line()) == LINE_OK))
+	while((m_check_state == CHECK_STATE_CONTENT && line_status == LINE_OK) || ((line_status == parse_line()) == LINE_OK))
 	{
 		// 获取当前行文本
 		text = get_line();
@@ -504,13 +504,13 @@ http_conn::HTTP_CODE http_conn::process_read()
 http-conn::HTTP_CODE http_conn::do_request()
 {
 	// 初始化文件路径：将文档根目录复制到m_real_file
-	strcpy(m_read_file, doc_root);
+	strcpy(m_real_file, doc_root);
 	int len = strlen(doc_root);
 	// 获取URL中最后一个'/'后面的部分
 	const char *p = strrchr(m_url, '/');
 
 	//处理cgi(登陆/注册动态请求)
-	if(cgi == i && (*(p + 1) == '2' || *(p + 1) == '3'))
+	if(cgi == 1 && (*(p + 1) == '2' || *(p + 1) == '3'))
 	{
 		// 根据URL判断是登录('2')还是注册('3')
 		char flag = m_url[1];
@@ -599,7 +599,7 @@ http-conn::HTTP_CODE http_conn::do_request()
 	else if(*(p + 1) == '1')
 	{
 		char *m_url_real = (char *)malloc(sizeof(char) * 200);
-		strcpy(m_url_real, "/log.html")l
+		strcpy(m_url_real, "/log.html");
 		strncpy(m_real_file + len, m_url_rael, strlen(m_url_real));
 
 		free(m_url_real);
@@ -635,7 +635,7 @@ http-conn::HTTP_CODE http_conn::do_request()
 	// 检查文件状态
 	if(stat(m_real_file, &m_file_stat) < 0)
 		// 文件不存在
-		retrun NO_RESOURCE;
+		return NO_RESOURCE;
 
 	// 检查文件权限
 	if(!(m_file_stat.st_mode & S_IROTH))
@@ -850,7 +850,7 @@ bool http_conn::process_write(HTTP_CODE ret)
 		// 添加头部，包含错误页面长度
 		add_headers(strlen(error_500_form));
 		// 添加错误页面内容
-		if(!add_conten(error_500_form))
+		if(!add_content(error_500_form))
 		{
 			return false;
 		}
@@ -886,7 +886,7 @@ bool http_conn::process_write(HTTP_CODE ret)
 			m_iv[0].iov_base = m_write_buf;				// 响应头部分
 			m_iv[0].iov_len = m_write_idx;				// 头部长度
 			m_iv[1].iov_base = m_file_address;			// 文件内容部分
-			m_iv[1].iov_len = m_file_stat.st.size;		// 文件长度
+			m_iv[1].iov_len = m_file_stat.st_size;		// 文件长度
 			m_iv_count = 2;								// 两个缓冲区
 			bytes_to_send = m_write_idx + m_file_stat.st.size;	// 总发送字节数
 			return true;
@@ -894,7 +894,7 @@ bool http_conn::process_write(HTTP_CODE ret)
 		// 文件为空的情况
 		else
 		{
-			const char *ok_string = "<html><bodu></body></html>";
+			const char *ok_string = "<html><body></body></html>";
 			add_headers(strlen(ok_string));
 			if(!add_content(ok_string))
 				return false;
