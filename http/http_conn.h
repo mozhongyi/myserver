@@ -101,8 +101,8 @@ public:
 	}
 	//初始化数据库结果集
 	void initmysql_result(connection_pool *connPool);
-	int timer_flag;			//定时器标志
-	int improv;				//改进标志
+	int timer_flag;			//标记连接是否超时
+	int improv;				//标记任务是否已经完成
 
 private:
 	// 初始化连接的其他参数

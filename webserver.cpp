@@ -389,3 +389,128 @@ void WebServer::dealwithread(int sockfd)
 		}
 	}
 }
+
+// 处理客户端写操作
+void WebServer::dealwithwrite(int sockfd)
+{
+	// 获取该socket的定时器（用于超时管理）
+	util_timer *timer = users_timer[sockfd].timer;
+	// Reactor 模式：I/O 操作由线程池处理
+	if(1 == m_actormodel)
+	{
+		// 更新定时器，防止处理期间超时
+		if(timer)
+		{
+			adjust_timer(timer);
+		}
+		// 提交写任务到线程池
+		m_pool->append(users + sockfd, 1);
+		// 等待任务完成
+		while(true)
+		{
+			if(1 == users[sockfd].improv)
+			{
+				// 如果任务期间发生超时，关闭连接
+				if(1 == users[sockfd].timer_flag)
+				{
+					// 如果任务期间发生超时，关闭连接
+					deal_timer(timer, sockfd);
+					// 重置超时
+					users[sockfd].timer_flag = 0;
+				}
+				// 重置任务状态
+				users[sockfd].improv = 0;
+				break;
+			}
+		}
+	}
+	// Proactor 模式：直接尝试写（通常由系统异步完成）
+	else
+	{
+		// 尝试发送数据
+		if(users[sockfd].write())
+		{
+			LOG_INFO("send data to the client(%s)", inet_ntoa(users[sockfd].get_address()->sin_addr))
+			// 更新定时器，防止超时
+			if(timer)
+			{
+				adjust_timer(timer);
+			}
+		}
+		// 写失败(如连接断开)，关闭socket
+		else
+		{
+			deal_timer(timer, sockfd);
+		}
+	}
+}
+
+// 基于epoll的事件循环，服务器的核心部分
+void WebServer::eventLoop()
+{
+	// 标记是否发生超时事件
+	bool timeout = false;
+	// 标记是否停止服务器
+	bool stop_server = false;
+
+	while(!stop_server)
+	{
+		// 等待事件发生，无限等待(-1表示阻塞直到有事件发生)
+		int number = epoll_wait(m_epollfd, events, MAX_EVENT_NUMBER, -1);
+		// 处理epoll_wait错误
+		if(number < 0 && errno != EINTR)
+		{
+			LOG_ERROR("%s", "epoll failure");
+			break;
+		}
+		
+		// 处理所有就绪的事件
+		for(int i = 0; i < number; i++)
+		{
+			int sockfd = events[i].data.fd;
+
+			//处理新到的客户连接
+			if(sockfd == m_listenfd)
+			{
+				// 处理新客户端连接
+				bool flag = dealclientdata();
+				if(false == flag)
+					// 处理失败则跳过
+					continue;
+			}
+			// 处理连接关闭或错误事件
+			else if(events[i].event & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
+			{
+				// 服务器端关闭连接，移除对应的定时器
+				util_timer *timer = users_timer[sockfd].timer;
+				deal_timer(timer, sockfd);
+			}
+			// 处理信号事件(通过管道传递的信号)
+			else if((sockfd == m_pipefd[0] && (events[i].events & EPOLLIN)))
+			{
+				bool flag = dealwithsignal(timeout, stop_server);
+				if(false == flag)
+					LOG_ERROR("%s", "dealclientdata failure");
+			}
+			// 处理客户连接上接受到的数据
+			else if(event[i].events & EPOLLIN)
+			{
+				dealwithread(sockfd);
+			}
+			// 处理可写事件
+			else if(events[i].events & EPOLLOUT)
+			{
+				dealwithwrite(sockfd);
+			}
+		}
+		// 如果发生了超时事件，处理定时器
+		if(timeout)
+		{
+			// 执行定时器处理函数
+			utils.timer_handler();
+			LOG_INFO("%s", "timer tick");
+
+			timeout = false;
+		}
+	}
+}
