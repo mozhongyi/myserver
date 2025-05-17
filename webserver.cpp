@@ -5,7 +5,7 @@
  ************************************************************************/
 #include "webserver.h"
 
-WebServer::webServer()
+WebServer::WebServer()
 {
 	//http_conn类对象
 	users = new http_conn[MAX_FD];
@@ -13,7 +13,7 @@ WebServer::webServer()
 	//root文件夹路径
 	char server_path[200];
 	getcwd(server_path, 200);
-	char root[6] = "/root"l
+	char root[6] = "/root";
 	m_root = (char *)malloc(strlen(server_path) + strlen(root) + 1);
 	strcpy(m_root, server_path);
 	strcat(m_root, root);
@@ -69,7 +69,7 @@ void WebServer::tri_mode()
 		m_CONNTrigmode = 0;
 	}
 	//ET + ET
-	else if(3 == TRIGMode)
+	else if(3 == m_TRIGMode)
 	{
 		m_LISTENTrigmode = 1;
 		m_CONNTrigmode = 1;
@@ -130,7 +130,7 @@ void WebServer::eventListen()
 	bzero(&address, sizeof(address));
 	address.sin_family = AF_INET;
 	address.sin_addr.s_addr = htonl(INADDR_ANY);
-	address.sin_port = htos(m_port);
+	address.sin_port = htons(m_port);
 
 	int flag = 1;
 	/*
@@ -177,7 +177,7 @@ void WebServer::eventListen()
 //初始化用户连接数据,创建并设置定时器,将定时器添加到定时器链表
 void WebServer::timer(int connfd, struct sockaddr_in client_address)
 {
-	users[connfd].init(connfd, client_address, m_root, m_root, m_CONNTrigmode, m_close_log, m_user, m_passWord, m_databaseName);
+	users[connfd].init(connfd, client_address, m_root, m_CONNTrigmode, m_close_log, m_user, m_passWord, m_databaseName);
 
 	//初始化client_data数据
 	users_timer[connfd].address = client_address;
@@ -339,14 +339,14 @@ void WebServer::dealwithread(int sockfd)
 	{
 		if(timer)
 		{
-			ajust_timer(timer);
+			adjust_timer(timer);
 		}
 
 		// 若监测到读事件，将该事件放入请求队列
 		// 将读事件放入线程池请求队列
         // 参数: users + sockfd - 对应的用户连接对象
         //       0 - 表示读事件
-		m_pool->append(users + scokfd, 0);
+		m_pool->append(users + sockfd, 0);
 
 		// 等待工作线程处理完成
 		while(true)
@@ -430,7 +430,7 @@ void WebServer::dealwithwrite(int sockfd)
 		// 尝试发送数据
 		if(users[sockfd].write())
 		{
-			LOG_INFO("send data to the client(%s)", inet_ntoa(users[sockfd].get_address()->sin_addr))
+			LOG_INFO("send data to the client(%s)", inet_ntoa(users[sockfd].get_address()->sin_addr));
 			// 更新定时器，防止超时
 			if(timer)
 			{
@@ -493,7 +493,7 @@ void WebServer::eventLoop()
 					LOG_ERROR("%s", "dealclientdata failure");
 			}
 			// 处理客户连接上接受到的数据
-			else if(event[i].events & EPOLLIN)
+			else if(events[i].events & EPOLLIN)
 			{
 				dealwithread(sockfd);
 			}
