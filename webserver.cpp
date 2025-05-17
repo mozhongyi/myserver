@@ -220,4 +220,172 @@ void WebServer::deal_timer(util_timer *timer, int sockfd)
 	LOG_INFO("close fd %d", users_timer[sockfd].sockfd);
 }
 
+// 处理客户端连接请求的函数
+bool WebServer::dealclientdata()
+{
+	// 定义客户端地址结构
+	struct sockaddr_in client_address;
+	socklen_t client_addrlength = sizeof(client_address);
+	// 根据监听模式决定处理方式
+	if(0 == m_LISTENTrigmode)		// 如果是水平触发模式(LT)
+	{
+		// 接受一个客户端连接
+		int connfd = accept(m_listenfd, (struct sockaddr *)&client_address, &client_addrlength);
+		// 接受连接失败
+		if(connfd < 0)
+		{
+			LOG_ERROR("%s:errno is:%d", "accept error", errno);
+			return false;
+		}
+		// 检查是否超过最大连接数限制
+		if(http_conn::m_user_count >= MAX_FD)
+		{
+			// 向客户端发送服务器繁忙错误,并关闭连接
+			utils.show_error(connfd, "Internal server busy");
+			LOG_ERROR("%s", "Internal server busy");
+			return false;
+		}
+		// 为新连接创建定时器
+		timer(connfd, client_address);
+	}
+	// 如果是边缘触发模式(ET)
+	else
+	{
+		// 边缘触发模式下需要循环accept直到没有新连接为止
+		while(1)
+		{
+			int connfd = accept(m_listenfd, (struct sockaddr *)&client_address, &client_addrlength);
+			// 接受连接失败
+			if(connfd < 0)
+			{
+				LOG_ERROR("%s:errno is:%d", "accept error", errno);
+				break;
+			}
+			// 检查是否超过最大连接数限制
+			if(http_conn::m_user_count >= MAX_FD)
+			{
+				utils.show_error(connfd, "Internal server busy");
+				LOG_ERROR("%s", "Internal server busy");
+				break;
+			}
+			// 为新连接创建定时器
+			timer(connfd, client_address);
+		}
+		// ET模式下总是返回false
+		return false;
+	}
+	// LT模式下成功处理返回true
+	return true;
+}
 
+// 处理信号的函数
+// timeout - 输出参数，标记是否收到超时信号
+// stop_server - 输出参数，标记是否收到停止服务信号
+bool WebServer::dealwithsignal(bool &timeout, bool &stop_server)
+{
+	int ret = 0;
+	int sig;
+	// 用于接收信号的缓冲区
+	char signals[1024];
+	// 从管道读取信号数据
+	ret = recv(m_pipefd[0], signals, sizeof(signals), 0);
+	// 错误处理
+	if(ret == -1)
+	{
+		return false;
+	}
+	// 管道关闭
+	else if(ret == 0)
+	{
+		return false;
+	}
+	else
+	{
+		for(int i = 0; i < ret; ++i)
+		{
+			// 检查每个信号类型
+			switch(signals[i])
+			{
+			// 定时器信号(超时信号)
+			case SIGALRM:
+			{
+				// 设置超时标志
+				timeout = true;
+				break;
+			}
+			// 终止信号
+			case SIGTERM:
+			{
+				// 设置停止服务标志
+				stop_server = true;
+				break;
+			}
+
+			}
+		}
+	}
+	return true;
+}
+
+// 处理读事件的函数
+// sockfd - 发生读事件的套接字描述符
+void WebServer::dealwithread(int sockfd)
+{
+	// 获取与该套接字关联的定时器
+	util_timer *timer = users_timer[sockfd].timer;
+	
+	// Reactor模式处理
+	if(1 == m_actormodel)	// Reactor模式
+	{
+		if(timer)
+		{
+			ajust_timer(timer);
+		}
+
+		// 若监测到读事件，将该事件放入请求队列
+		// 将读事件放入线程池请求队列
+        // 参数: users + sockfd - 对应的用户连接对象
+        //       0 - 表示读事件
+		m_pool->append(users + scokfd, 0);
+
+		// 等待工作线程处理完成
+		while(true)
+		{
+			// 检查improv标志，表示工作线程已完成处理
+			if(1 == users[sockfd].timer_improv)
+			{
+				if(1 == users[sockfd].timer_flag)
+				{
+					deal_timer(timer, sockfd);
+					users[sockfd].timer_flag = 0;
+				}
+				users[sockfd].improv = 0;
+				break;
+			}
+		}
+	}
+	// Proactor模式
+	else
+	{
+		// 直接读取数据(主线程完成IO操作)
+		if(users[sockfd].read_once)			// 成功读取数据
+		{
+			LOG_INFO("deal with the client(%s)", inet_ntoa(users[sockfd].get_address()->sin_addr));
+
+			// 若监测到读事件，将该事件放入请求队列
+			// 将请求放入线程池处理(只处理业务逻辑)
+			m_pool->append_p(users+sockfd);
+			// 调整定时器
+			if(timer)
+			{
+				adjust_timer(timer);
+			}
+		}
+		// 读取失败
+		else
+		{
+			// 处理定时器(关闭连接等)
+			deal_timer(timer, sockfd);
+		}
+	}
+}
