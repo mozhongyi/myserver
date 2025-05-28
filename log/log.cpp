@@ -86,6 +86,7 @@ bool Log::init(const char *file_name, int close_log, int log_buf_size,int split_
 	return true;
 }
 
+// 写入日志的核心函数
 void Log::write_log(int level, const char *format, ...)
 {
 	//获取当前时间(精确到微妙)
@@ -96,6 +97,7 @@ void Log::write_log(int level, const char *format, ...)
 	//localtime返回一个tm结构体指针，该结构体能把时间戳分解为具体的年月日
 	struct tm *sys_tm = localtime(&t);
 	struct tm my_tm = *sys_tm;
+	// 根据日志级别设置前缀
 	char s[16] = {0};
 	switch(level)
 	{
@@ -120,7 +122,7 @@ void Log::write_log(int level, const char *format, ...)
 	//日志行数计数器递增
 	m_count++;
 
-	//检测是否需要生成新的日志，每天的日志文件都不一样需要生成
+	// 检查是否需要创建新日志文件（跨天或文件行数达到上限）
 	if(m_today != my_tm.tm_mday || m_count % m_split_lines == 0)
 	{
 		char new_log[256] = {0};
@@ -146,6 +148,7 @@ void Log::write_log(int level, const char *format, ...)
 			// 生成格式：目录/前缀_年_月_日_日志名.序号
 			snprintf(new_log, 255, "%s%s%s.%lld", dir_name, tail, log_name, m_count / m_split_lines);
 		}
+		// 创建新日志文件
 		m_fp = fopen(new_log, "a");
 	}
 
@@ -183,10 +186,11 @@ void Log::write_log(int level, const char *format, ...)
 		m_mutex.unlock();
 	}
 	
-	// 清理可变参数列表
+	// 清理可变参数列表
 	va_end(valst);
 }
 
+// 强制刷新缓冲区
 void Log::flush(void)
 {
 	m_mutex.lock();
