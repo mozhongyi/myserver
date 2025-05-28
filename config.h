@@ -14,7 +14,7 @@ class Config
 {
 public:
 	Config();
-	~Config();
+	~Config(){};
 
 	void parse_arg(int argc,char *argv[]);
 
@@ -28,7 +28,7 @@ public:
 	int TRIGMode;
 
 	//listenfd触发模式
-	int LISTENTrimode;
+	int LISTENTrigmode;
 
 	//connfd触发模式
 	int CONNTrigmode;
