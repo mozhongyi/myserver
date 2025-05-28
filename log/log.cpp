@@ -13,7 +13,9 @@ using namespace std;
 
 Log::Log()
 {
+	// 日志行数计数器
 	m_count = 0;
+	// 默认同步模式
 	m_is_async = false;
 }
 
@@ -21,6 +23,7 @@ Log::~Log()
 {
 	if(m_fp != NULL)
 	{
+		// 确保关闭日志文件
 		fclose(m_fp);
 	}
 }
@@ -38,26 +41,42 @@ bool Log::init(const char *file_name, int close_log, int log_buf_size,int split_
 		pthread_create(&tid, NULL, flush_log_thread, NULL);
 	}
 
+	// 是否关闭日志
 	m_close_log = close_log;
+	// 缓冲区大小
 	m_log_buf_size = log_buf_size;
+	// 分配缓冲区
 	m_buf = new char[m_log_buf_size];
 	memset(m_buf, '\0', m_log_buf_size);
+	// 单个文件最大行数
 	m_split_lines = split_lines;
 
+	// 获取当前时间
 	time_t t = time(NULL);
 	struct tm *sys_tm = localtime(&t);
 	struct tm my_tm = *sys_tm;
-
+	
+	// 解析文件名路径
 	const char *p = strrchr(file_name, '/');
 	char log_full_name[256] = {0};
-
-	if(p == NULL)
+	
+	// 构造完整日志文件名
+	if(p == NULL)	// 无路径情况
 	{
 		snprintf(log_full_name, 255, "%d_%02d_%02d_%s", dir_name, my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, log_name);
 	}
-
+	// 有路径情况
+	else
+	{
+		strcpy(log_name, p+1);
+		strncpy(dir_name, p - file_name + 1);
+		snprintf(log_full_name, 255, "%s%d_%02d_%02d_%s",dir_name,my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, log_name);
+	}
+	
+	// 记录当前日期
 	m_today = my_tm.tm_mday;
 
+	// 打开日志文件（追加模式）
 	m_fp = fopen(log_full_name,"a");
 	if(m_fp == NULL)
 	{
