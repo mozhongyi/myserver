@@ -63,13 +63,13 @@ bool Log::init(const char *file_name, int close_log, int log_buf_size,int split_
 	// 构造完整日志文件名
 	if(p == NULL)	// 无路径情况
 	{
-		snprintf(log_full_name, 255, "%d_%02d_%02d_%s", dir_name, my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, log_name);
+		snprintf(log_full_name, 255, "%d_%02d_%02d_%s", my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, file_name);
 	}
 	// 有路径情况
 	else
 	{
-		strcpy(log_name, p+1);
-		strncpy(dir_name, p - file_name + 1);
+		strcpy(log_name, p + 1);
+		strncpy(dir_name, file_name, p - file_name + 1);
 		snprintf(log_full_name, 255, "%s%d_%02d_%02d_%s",dir_name,my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, log_name);
 	}
 	
@@ -163,7 +163,7 @@ void Log::write_log(int level, const char *format, ...)
 
 	//写入的具体时间内容格式
 	//生成格式如 "2023-08-15 14:30:45.123456 [info]: "
-	int n= snprintf(m_buf, 48, "%d-%02d-%02d %02d:%02d:%02d/%06ld %s",
+	int n= snprintf(m_buf, 48, "%d-%02d-%02d %02d:%02d:%02d.%06ld %s",
 					my_tm.tm_year+1900, my_tm.tm_mon+1, my_tm.tm_mday,
 					my_tm.tm_hour, my_tm.tm_min, my_tm.tm_sec, now.tv_usec, 				   s);
 	//专门用与处理可变参数列表格式化
