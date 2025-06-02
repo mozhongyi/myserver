@@ -23,7 +23,7 @@ connection_pool::connection_pool()
 }
 
 //唯一连接池实例
-connection_pool *conection_pool::GetInstance()
+connection_pool *connection_pool::GetInstance()
 {
 	static connection_pool connPool;
 	return &connPool;
@@ -31,13 +31,13 @@ connection_pool *conection_pool::GetInstance()
 
 //初始化,url:主机地址,User:登陆数据库用户名,PassWord:密码,DBName:数据库名
 //Port:数据库端口号,close_log:日志开关
-void connection_pool::init(string url, string User, string PassWord, string DBName, int Port, int close_log)
+void connection_pool::init(string url, string User, string PassWord, string DBName, int Port, int MaxConn, int close_log)
 {
 	m_url = url;
 	m_Port = Port;
 	m_User = User;
 	m_PassWord = PassWord;
-	m_DataBaseName = DBName;
+	m_DatabaseName = DBName;
 	m_close_log = close_log;
 
 	for(int i=0; i<MaxConn; i++)
@@ -54,7 +54,7 @@ void connection_pool::init(string url, string User, string PassWord, string DBNa
 
 		if(con == NULL)
 		{
-			LOG_error("MySQL Error");
+			LOG_ERROR("MySQL Error");
 			exit(1);
 		}
 		connList.push_back(con);
@@ -87,6 +87,22 @@ MYSQL *connection_pool::GetConnection()
 	return con;
 }
 
+// 释放当前使用的连接
+bool connection_poll::ReleaseConnection(MYSQL *con)
+{
+	if(NULL == con)
+		return false;
+	lock.lock();
+
+	connList.push_back(con);
+	++m_FreeConn;
+	--m_CurConn;
+
+	lock.unlock();
+	reserver.post();
+	return true;
+}
+
 //销毁数据库连接池
 void connection_pool::DestroyPool()
 {
@@ -103,6 +119,7 @@ void connection_pool::DestroyPool()
 		m_FreeConn = 0;
 		connList.clear();
 	}
+	lock.unlock();
 }
 
 //当前空闲的连接数
@@ -116,7 +133,7 @@ connection_pool::~connection_pool()
 	DestroyPool();
 }
 
-connectionRAII::connection(MYSQL **SQL, connection_pool *connPool)
+connectionRAII::connectionRAII(MYSQL **SQL, connection_pool *connPool)
 {
 	*SQL = connPool->GetConnection();
 
@@ -126,5 +143,5 @@ connectionRAII::connection(MYSQL **SQL, connection_pool *connPool)
 
 connectionRAII::~connectionRAII()
 {
-	poolRAII->ReleaseConnection(connRAII);
+	poolRAII->ReleaseConnection(conRAII);
 }
