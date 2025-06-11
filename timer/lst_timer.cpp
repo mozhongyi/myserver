@@ -15,11 +15,11 @@ sort_timer_lst::sort_timer_lst()
 //删除定时器链表的所有数据
 sort_timer_lst::~sort_timer_lst()
 {
-	utile_timer *tmp = head;
+	util_timer *tmp = head;
 	while(tmp)
 	{
 		head = tmp->next;
-		delet tmp;
+		delete tmp;
 		tmp = head;
 	}
 }
@@ -95,7 +95,7 @@ void sort_timer_lst::del_timer(util_timer *timer)
 	//链表中只有一个结点，且为该结点
 	if((timer == head) && (timer == tail))
 	{
-		delet timer;
+		delete timer;
 		head = NULL;
 		tail = NULL;
 		return;
@@ -186,10 +186,10 @@ void Utils::init(int timeslot)
 }
 
 //对文件描述符设置非阻塞
-int Utiles::setnonblocking(int fd)
+int Utils::setnonblocking(int fd)
 {
 	//获取当前文件状态标志
-	int old_option = fcntl(fd, FGETFL);
+	int old_option = fcntl(fd, F_GETFL);
 	//添加非阻塞标志(O_NONBLOCK)，ET模式必须配合非阻塞
 	int new_option = old_option | O_NONBLOCK;
 	//设置新的文件状态标志
