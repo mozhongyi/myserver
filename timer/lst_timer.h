@@ -4,7 +4,7 @@
     > Created Time: 2025年05月04日 星期日 16时18分40秒
  ************************************************************************/
 #ifndef LST_TIMER
-#define LSR_TIMER
+#define LST_TIMER
 
 #include <unistd.h>
 #include <signal.h>
@@ -27,7 +27,7 @@
 #include <sys/uio.h>
 
 #include <time.h>
-#include <../log/log.h>
+#include "../log/log.h"
 
 class util_timer;
 
@@ -91,7 +91,7 @@ public:
 	void addsig(int sig, void(handler)(int), bool restart = true);
 
 	//定时处理任务
-	void timer_hander();
+	void timer_handler();
 	
 	void show_error(int connfd, const char *info);
 
