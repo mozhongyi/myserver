@@ -24,7 +24,7 @@
 #include <sys/uio.h>
 #include <map>
 
-#include "..lock/locker.h"
+#include "../lock/locker.h"
 #include "../CGImysql/sql_connection_pool.h"
 #include "../timer/lst_timer.h"
 #include "../log/log.h"
@@ -151,7 +151,7 @@ public:
 private:
 	int m_sockfd;						// 套接字描述符
 	sockaddr_in m_address;				// 客户端地址
-	char m_read_buf[READ_BUFF_SIZE];	// 读缓冲区
+	char m_read_buf[READ_BUFFER_SIZE];	// 读缓冲区
 	int m_read_idx;						// 读缓冲区中已经读取的字节数
 	long m_checked_idx;					// 正在分析的字符在读缓存区的位置
 	int m_start_line;					// 当前正在解析的行的起始位置
@@ -177,7 +177,7 @@ private:
 
 	map<string, string> m_users;		// 用户信息
 	int m_TRIGMode;						// 是否关闭日志
-	int close_log;						// 数据库用户名
+	int m_close_log;						// 数据库用户名
 	char sql_user[100];					// 数据库用户名
 	char sql_passwd[100];				// 数据库密码
 	char sql_name[100];					// 数据库名
