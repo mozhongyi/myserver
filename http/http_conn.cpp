@@ -107,7 +107,7 @@ int http_conn::m_epollfd = -1;
 
 // 关闭连接，关闭一个连接，客户总量减一
 // 参数：read_close - 是否真正需要关闭连接(用于条件性关闭)
-void http_conn::close_conn(bool read_close)
+void http_conn::close_conn(bool real_close)
 {
 	// 检查是否需要真正关闭且套接字描述符有效
 	if(real_close && (m_sockfd) != -1)
@@ -158,6 +158,8 @@ void http_conn::init()
 	mysql = NULL;
 	// 待发送字节数清零
 	bytes_to_send = 0;
+	// 已发送的字节数
+	bytes_have_send = 0;
 	// 初始状态：解析请求行
 	m_check_state = CHECK_STATE_REQUESTLINE;
 	// 默认不保持连接(HTTP Keep-Alive)
@@ -207,7 +209,7 @@ http_conn::LINE_STATUS http_conn::parse_line()
 	// 临时存储当前检查的字符
 	char temp;
 	// 遍历已读取但未检查的数据
-	for(; m_checked_idx < m_read_id; ++m_checked_idx)
+	for(; m_checked_idx < m_read_idx; ++m_checked_idx)
 	{
 		// 获取当前字符
 		temp = m_read_buf[m_checked_idx];
@@ -361,6 +363,12 @@ http_conn::HTTP_CODE http_conn::parse_request_line(char *text)
 		m_url = strchr(m_url, '/');							// 查找第一个'/'
 	}
 	
+	if(strncasecmp(m_url, "https://", 8) == 0)
+	{
+		m_url += 8;
+		m_url = strchr(m_url, '/');
+	}
+
 	// 9. 检查URL是否有效
 	if(!m_url || m_url[0] != '/')
 		return BAD_REQUEST;						// URL必须以'/'开头
@@ -411,10 +419,16 @@ http_conn::HTTP_CODE http_conn::parse_headers(char *text)
 	else if(strncasecmp(text, "Content-length:", 15) == 0)
 	{
 		// 跳过"Content-length:"
-		text += 5;
+		text += 15;
 		// 跳过空白字符
 		text += strspn(text, " \t");
 		// 直接存储主机名指针
+		m_content_length = atol(text);
+	}
+	else if(strncasecmp(text, "Host:", 5) == 0)
+	{
+		text += 5;
+		text += strspn(text, " \t");
 		m_host = text;
 	}
 	// 未知头部处理
@@ -454,7 +468,7 @@ http_conn::HTTP_CODE http_conn::process_read()
 	char *text = 0;
 	
 	// 主解析循环：处理内容体或按行解析
-	while((m_check_state == CHECK_STATE_CONTENT && line_status == LINE_OK) || ((line_status == parse_line()) == LINE_OK))
+	while((m_check_state == CHECK_STATE_CONTENT && line_status == LINE_OK) || ((line_status = parse_line()) == LINE_OK))
 	{
 		// 获取当前行文本
 		text = get_line();
@@ -501,7 +515,7 @@ http_conn::HTTP_CODE http_conn::process_read()
 }
 
 // 处理HTTP请求的核心函数，返回HTTP状态码
-http-conn::HTTP_CODE http_conn::do_request()
+http_conn::HTTP_CODE http_conn::do_request()
 {
 	// 初始化文件路径：将文档根目录复制到m_real_file
 	strcpy(m_real_file, doc_root);
@@ -579,10 +593,10 @@ http-conn::HTTP_CODE http_conn::do_request()
 			// 检查用户名是否存在且密码匹配
 			if(users.find(name) != users.end() && users[name] == password)
 				// 登录成功
-				strcpy(m_url, "welcome.html");
+				strcpy(m_url, "/welcome.html");
 			else
 				// 登录失败
-				strcpy(m_url, "logError.html");
+				strcpy(m_url, "/logError.html");
 		}
 	}
 	
@@ -608,7 +622,7 @@ http-conn::HTTP_CODE http_conn::do_request()
 	{
 		char *m_url_real = (char *)malloc(sizeof(char) * 200);
 		strcpy(m_url_real, "/picture.html");
-		strcpy(m_real_file + len, m_url_real, strlen(m_url_real));
+		strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
 		free(m_url_real);
 	}
@@ -797,7 +811,7 @@ bool http_conn::add_status_line(int status, const char *title)
 }
 
 // 添加HTTP响应头部的多个标准字段
-bool http_conn::add_headers(int conten_len)
+bool http_conn::add_headers(int content_len)
 {
 	// 依次添加三个标准HTTP头部字段，使用短路与(&&)确保顺序执行：
     // 1. 添加Content-Length头部（内容长度）
@@ -870,7 +884,7 @@ bool http_conn::process_write(HTTP_CODE ret)
 	{
 		add_status_line(403, error_403_title);
 		add_headers(strlen(error_403_form));
-		if(!add_content(error_404_form))
+		if(!add_content(error_403_form))
 			return false;
 		break;
 	}
