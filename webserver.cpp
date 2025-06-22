@@ -422,38 +422,52 @@ void WebServer::dealwithread(int sockfd)
 
 void WebServer::dealwithwrite(int sockfd)
 {
+	// 获取与该套接字关联的定时器（用于超时管理）
     util_timer *timer = users_timer[sockfd].timer;
-    //reactor
+    // Reactor 模式处理
     if (1 == m_actormodel)
     {
+		// 如果定时器存在，更新其过期时间（防止处理期间超时）
         if (timer)
         {
             adjust_timer(timer);
         }
-
+		
+		// 将写任务提交到线程池（核心Reactor操作）
+        // users + sockfd: 指向http_conn对象的指针
+        // 1: 表示写事件（通常0=读事件，1=写事件）
         m_pool->append(users + sockfd, 1);
-
+		
+		// 等待线程池完成写操作（同步等待）
         while (true)
         {
+			 // 检查improv标志（由工作线程设置，表示操作完成）
             if (1 == users[sockfd].improv)
             {
+				// 如果工作线程设置了timer_flag（表示需要关闭连接）
                 if (1 == users[sockfd].timer_flag)
                 {
+					// 处理定时器（删除并关闭连接）
                     deal_timer(timer, sockfd);
+					// 重置标志
                     users[sockfd].timer_flag = 0;
                 }
+				// 重置完成标志
                 users[sockfd].improv = 0;
                 break;
             }
         }
     }
+	// Proactor 模式处理
     else
     {
-        //proactor
+        // 直接在主线程执行同步写操作（核心Proactor操作）
         if (users[sockfd].write())
         {
+			// 写成功：记录客户端IP
             LOG_INFO("send data to the client(%s)", inet_ntoa(users[sockfd].get_address()->sin_addr));
-
+			
+			// 更新定时器（延长连接存活时间）
             if (timer)
             {
                 adjust_timer(timer);
@@ -461,6 +475,7 @@ void WebServer::dealwithwrite(int sockfd)
         }
         else
         {
+			// 写失败：处理定时器（触发连接关闭）
             deal_timer(timer, sockfd);
         }
     }
@@ -468,54 +483,65 @@ void WebServer::dealwithwrite(int sockfd)
 
 void WebServer::eventLoop()
 {
+	// 定时器超时标志
     bool timeout = false;
+	// 服务器停止标志
     bool stop_server = false;
 
+	// 主事件循环
     while (!stop_server)
     {
+		// 等待epoll事件（无限阻塞）
         int number = epoll_wait(m_epollfd, events, MAX_EVENT_NUMBER, -1);
-        if (number < 0 && errno != EINTR)
+        // 错误处理（忽略信号中断）
+ 	    if (number < 0 && errno != EINTR)
         {
             LOG_ERROR("%s", "epoll failure");
             break;
         }
-
+		
+		// 处理所有就绪事件
         for (int i = 0; i < number; i++)
         {
             int sockfd = events[i].data.fd;
 
-            //处理新到的客户连接
+            // 处理新连接请求（监听套接字事件）
             if (sockfd == m_listenfd)
             {
                 bool flag = dealclientdata();
                 if (false == flag)
                     continue;
             }
+			// 处理连接异常（断开/错误）
             else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
             {
                 //服务器端关闭连接，移除对应的定时器
                 util_timer *timer = users_timer[sockfd].timer;
-                deal_timer(timer, sockfd);
+                // 关闭连接并清理资源
+				deal_timer(timer, sockfd);
             }
-            //处理信号
+            // 处理信号事件（统一事件源）
             else if ((sockfd == m_pipefd[0]) && (events[i].events & EPOLLIN))
             {
                 bool flag = dealwithsignal(timeout, stop_server);
                 if (false == flag)
                     LOG_ERROR("%s", "dealclientdata failure");
             }
-            //处理客户连接上接收到的数据
+            // 处理可读事件（客户端数据到达）
             else if (events[i].events & EPOLLIN)
             {
                 dealwithread(sockfd);
             }
+			// 处理可写事件（可发送数据）
             else if (events[i].events & EPOLLOUT)
             {
                 dealwithwrite(sockfd);
             }
         }
+		// 定时器超时处理（非实时，每轮事件处理后检查）
         if (timeout)
         {
+			// 执行定时任务（清理超时连接）
             utils.timer_handler();
 
             LOG_INFO("%s", "timer tick");
